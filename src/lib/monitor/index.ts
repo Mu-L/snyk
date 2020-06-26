@@ -272,6 +272,9 @@ async function monitorDepTree(
             versionBuildInfo: JSON.stringify(
               scannedProject.meta?.versionBuildInfo,
             ),
+            gradleProjectName: scannedProject.meta?.gradleProjectName
+              ? scannedProject.meta?.gradleProjectName
+              : undefined,
           },
           policy: policy ? policy.toString() : undefined,
           package: depTree,
@@ -393,6 +396,9 @@ export async function monitorDepGraph(
             versionBuildInfo: JSON.stringify(
               scannedProject.meta?.versionBuildInfo,
             ),
+            gradleProjectName: scannedProject.meta?.gradleProjectName
+              ? scannedProject.meta?.gradleProjectName
+              : undefined,
           },
           policy: policy ? policy.toString() : undefined,
           depGraphJSON: depGraph, // depGraph will be auto serialized to JSON on send
