@@ -1,7 +1,6 @@
 import { InspectResult } from '@snyk/cli-interface/legacy/plugin';
 import chalk from 'chalk';
 
-import * as snyk from '../index';
 import * as config from '../config';
 import { isCI } from '../is-ci';
 import { makeRequest } from '../request/promise';
@@ -9,7 +8,7 @@ import { MonitorResult, Options } from '../types';
 import * as spinner from '../../lib/spinner';
 import { getPlugin } from './plugins';
 import { BadResult, GoodResult } from '../../cli/commands/monitor/types';
-import { formatMonitorOutput } from '../../cli/commands/monitor/formatters/format-monitor-response';
+import { formatErrorMonitorOutput, formatMonitorOutput } from '../formatters';
 import { getExtraProjectCount } from '../plugins/get-extra-project-count';
 import {
   AuthFailedError,
@@ -25,6 +24,7 @@ import {
   MonitorDependenciesResponse,
 } from './types';
 import { findAndLoadPolicyForScanResult } from './policy';
+import { getAuthHeader } from '../api-token';
 
 const SEPARATOR = '\n-------------------------------------------------------\n';
 
@@ -47,6 +47,9 @@ export async function monitorEcosystem(
         error.statusCode === 401 &&
         error.message === 'authentication required'
       ) {
+        throw new DockerImageNotFoundError(path);
+      }
+      if (ecosystem === 'docker' && error.message === 'invalid image format') {
         throw new DockerImageNotFoundError(path);
       }
 
@@ -106,7 +109,7 @@ async function monitorDependencies(
         json: true,
         headers: {
           'x-is-ci': isCI(),
-          authorization: 'token ' + snyk.api,
+          authorization: getAuthHeader(),
         },
         body: monitorDependenciesRequest,
         qs: {
@@ -148,19 +151,28 @@ export async function getFormattedMonitorOutput(
   options: Options,
 ): Promise<string> {
   for (const monitorResult of monitorResults) {
-    const monOutput = formatMonitorOutput(
-      monitorResult.scanResult.identity.type,
-      monitorResult as MonitorResult,
-      options,
-      monitorResult.projectName,
-      await getExtraProjectCount(
-        monitorResult.path,
+    let monOutput = '';
+    if (monitorResult.ok) {
+      monOutput = formatMonitorOutput(
+        monitorResult.scanResult.identity.type,
+        monitorResult as MonitorResult,
         options,
-        // TODO: Fix to pass the old "inspectResult.plugin.meta.allSubProjectNames", which ecosystem uses this?
-        // "allSubProjectNames" can become a Fact returned by a plugin.
-        {} as InspectResult,
-      ),
-    );
+        monitorResult.projectName,
+        await getExtraProjectCount(
+          monitorResult.path,
+          options,
+          // TODO: Fix to pass the old "inspectResult.plugin.meta.allSubProjectNames", which ecosystem uses this?
+          // "allSubProjectNames" can become a Fact returned by a plugin.
+          {} as InspectResult,
+        ),
+      );
+    } else {
+      monOutput = formatErrorMonitorOutput(
+        monitorResult.scanResult.identity.type,
+        monitorResult as MonitorResult,
+        options,
+      );
+    }
     results.push({
       ok: true,
       data: monOutput,

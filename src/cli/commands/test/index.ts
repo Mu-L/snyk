@@ -1,131 +1,79 @@
 export = test;
 
+import * as Debug from 'debug';
 const cloneDeep = require('lodash.clonedeep');
 const assign = require('lodash.assign');
 import chalk from 'chalk';
+import { MissingArgError } from '../../../lib/errors';
+
 import * as snyk from '../../../lib';
-import * as config from '../../../lib/config';
-import { isCI } from '../../../lib/is-ci';
-import { apiTokenExists, getDockerToken } from '../../../lib/api-token';
-import * as Debug from 'debug';
-import * as pathLib from 'path';
-import {
-  Options,
-  ShowVulnPaths,
-  SupportedProjectTypes,
-  TestOptions,
-} from '../../../lib/types';
-import { isLocalFolder } from '../../../lib/detect';
+import { IacFileInDirectory, Options, TestOptions } from '../../../lib/types';
 import { MethodArgs } from '../../args';
 import { TestCommandResult } from '../../commands/types';
 import { LegacyVulnApiResult, TestResult } from '../../../lib/snyk-test/legacy';
-import {
-  IacTestResponse,
-  mapIacTestResult,
-} from '../../../lib/snyk-test/iac-test-result';
+import { mapIacTestResult } from '../../../lib/snyk-test/iac-test-result';
 
-import { FailOnError } from '../../../lib/errors/fail-on-error.ts';
 import {
-  dockerRemediationForDisplay,
-  formatTestMeta,
   summariseErrorResults,
   summariseVulnerableResults,
-} from './formatters';
+} from '../../../lib/formatters';
 import * as utils from './utils';
-import {
-  getIacDisplayedOutput,
-  getIacDisplayErrorFileOutput,
-} from './iac-output';
+import { getIacDisplayErrorFileOutput } from '../../../lib/formatters/iac-output';
 import { getEcosystemForTest, testEcosystem } from '../../../lib/ecosystems';
-import { isMultiProjectScan } from '../../../lib/is-multi-project-scan';
-import {
-  IacProjectType,
-  IacProjectTypes,
-  TEST_SUPPORTED_IAC_PROJECTS,
-} from '../../../lib/iac/constants';
-import { hasFixes, hasPatches, hasUpgrades } from './vuln-helpers';
-import { FAIL_ON, FailOn, SEVERITIES } from '../../../lib/snyk-test/common';
+import { hasFixes, hasPatches, hasUpgrades } from '../../../lib/vuln-helpers';
+import { FailOn } from '../../../lib/snyk-test/common';
 import {
   createErrorMappedResultsForJsonOutput,
-  dockerUserCTA,
   extractDataToSendFromResults,
-  getDisplayedOutput,
-} from './formatters/format-test-results';
+} from '../../../lib/formatters/test/format-test-results';
 
-import * as iacLocalExecution from './iac-local-execution';
+import { test as iacTest } from './iac-test-shim';
+import { validateCredentials } from './validate-credentials';
+import { validateTestOptions } from './validate-test-options';
+import { setDefaultTestOptions } from './set-default-test-options';
+import { processCommandArgs } from '../process-command-args';
+import { formatTestError } from './format-test-error';
+import { displayResult } from '../../../lib/formatters/test/display-result';
 
 const debug = Debug('snyk-test');
 const SEPARATOR = '\n-------------------------------------------------------\n';
 
-const showVulnPathsMapping: Record<string, ShowVulnPaths> = {
-  false: 'none',
-  none: 'none',
-  true: 'some',
-  some: 'some',
-  all: 'all',
-};
-
 // TODO: avoid using `as any` whenever it's possible
 
 async function test(...args: MethodArgs): Promise<TestCommandResult> {
-  const resultOptions = [] as any[];
-  const results = [] as any[];
-  let options = ({} as any) as Options & TestOptions;
+  const { options: originalOptions, paths } = processCommandArgs(...args);
+  const options = setDefaultTestOptions(originalOptions);
+  validateTestOptions(options);
+  validateCredentials(options);
 
-  if (typeof args[args.length - 1] === 'object') {
-    options = (args.pop() as any) as Options & TestOptions;
-  }
-
-  // populate with default path (cwd) if no path given
-  if (args.length === 0) {
-    args.unshift(process.cwd());
-  }
-  // org fallback to config unless specified
-  options.org = options.org || config.org;
-
-  // making `show-vulnerable-paths` 'some' by default.
-  const svpSupplied = (options['show-vulnerable-paths'] || '').toLowerCase();
-  options.showVulnPaths = showVulnPathsMapping[svpSupplied] || 'some';
-
-  if (
-    options.severityThreshold &&
-    !validateSeverityThreshold(options.severityThreshold)
-  ) {
-    return Promise.reject(new Error('INVALID_SEVERITY_THRESHOLD'));
-  }
-
-  if (options.failOn && !validateFailOn(options.failOn)) {
-    const error = new FailOnError();
-    return Promise.reject(chalk.red.bold(error.message));
-  }
-
-  try {
-    apiTokenExists();
-  } catch (err) {
-    if (options.docker && getDockerToken()) {
-      options.testDepGraphDockerEndpoint = '/docker-jwt/test-dependencies';
-      options.isDockerUser = true;
-    } else {
-      throw err;
-    }
+  // Handles no image arg provided to the container command until
+  // a validation interface is implemented in the docker plugin.
+  if (options.docker && paths.length === 0) {
+    throw new MissingArgError();
   }
 
   const ecosystem = getEcosystemForTest(options);
   if (ecosystem) {
     try {
-      const commandResult = await testEcosystem(
-        ecosystem,
-        args as string[],
-        options,
-      );
+      const commandResult = await testEcosystem(ecosystem, paths, options);
       return commandResult;
     } catch (error) {
-      throw new Error(error);
+      if (error instanceof Error) {
+        throw error;
+      } else {
+        throw new Error(error);
+      }
     }
   }
 
+  const resultOptions: Array<Options & TestOptions> = [];
+  const results = [] as any[];
+
+  // Holds an array of scanned file metadata for output.
+  let iacScanFailures: IacFileInDirectory[] | undefined;
+
   // Promise waterfall to test all other paths sequentially
-  for (const path of args as string[]) {
+  for (const path of paths) {
     // Create a copy of the options so a specific test can
     // modify them i.e. add `options.file` etc. We'll need
     // these options later.
@@ -134,41 +82,20 @@ async function test(...args: MethodArgs): Promise<TestCommandResult> {
     testOpts.projectName = testOpts['project-name'];
 
     let res: (TestResult | TestResult[]) | Error;
-
     try {
-      if (options.iac && options.experimental) {
+      if (options.iac) {
         // this path is an experimental feature feature for IaC which does issue scanning locally without sending files to our Backend servers.
         // once ready for GA, it is aimed to deprecate our remote-processing model, so IaC file scanning in the CLI is done locally.
-        res = await iacLocalExecution.test(path, options);
+        const { results, failures } = await iacTest(path, testOpts);
+        res = results;
+        iacScanFailures = failures;
       } else {
         res = await snyk.test(path, testOpts);
       }
-      if (testOpts.iacDirFiles) {
-        options.iacDirFiles = testOpts.iacDirFiles;
-      }
     } catch (error) {
-      // Possible error cases:
-      // - the test found some vulns. `error.message` is a
-      // JSON-stringified
-      //   test result.
-      // - the flow failed, `error` is a real Error object.
-      // - the flow failed, `error` is a number or string
-      // describing the problem.
-      //
-      // To standardise this, make sure we use the best _object_ to
-      // describe the error.
-
-      if (error instanceof Error) {
-        res = error;
-      } else if (typeof error !== 'object') {
-        res = new Error(error);
-      } else {
-        try {
-          res = JSON.parse(error.message);
-        } catch (unused) {
-          res = error;
-        }
-      }
+      // not throwing here but instead returning error response
+      // for legacy flow reasons.
+      res = formatTestError(error);
     }
 
     // Not all test results are arrays in order to be backwards compatible
@@ -228,7 +155,7 @@ async function test(...args: MethodArgs): Promise<TestCommandResult> {
   } = extractDataToSendFromResults(results, jsonData, options);
 
   if (options.json || options.sarif) {
-    // if all results are ok (.ok == true) then return the json
+    // if all results are ok (.ok == true)
     if (errorMappedResults.every((res) => res.ok)) {
       return TestCommandResult.createJsonTestCommandResult(
         stringifiedData,
@@ -257,19 +184,22 @@ async function test(...args: MethodArgs): Promise<TestCommandResult> {
       err.jsonNoVulns = dataToSendNoVulns;
     }
 
+    if (notSuccess) {
+      // Take the code of the first problem to go through error
+      // translation.
+      // Note: this is done based on the logic done below
+      // for non-json/sarif outputs, where we take the code of
+      // the first error.
+      err.code = errorResults[0].code;
+    }
     err.json = stringifiedData;
     err.jsonStringifiedResults = stringifiedJsonData;
     err.sarifStringifiedResults = stringifiedSarifData;
     throw err;
   }
 
-  const pinningSupported: LegacyVulnApiResult = results.find(
-    (res) => res.packageManager === 'pip',
-  );
-
   let response = results
     .map((result, i) => {
-      resultOptions[i].pinningSupported = pinningSupported;
       return displayResult(
         results[i] as LegacyVulnApiResult,
         resultOptions[i],
@@ -289,16 +219,11 @@ async function test(...args: MethodArgs): Promise<TestCommandResult> {
   let summaryMessage = '';
   let errorResultsLength = errorResults.length;
 
-  if (options.iac && options.iacDirFiles) {
-    const iacDirFilesErrors = options.iacDirFiles?.filter(
-      (iacFile) => iacFile.failureReason,
-    );
-    errorResultsLength = iacDirFilesErrors?.length || errorResults.length;
+  if (options.iac && iacScanFailures) {
+    errorResultsLength = iacScanFailures.length || errorResults.length;
 
-    if (iacDirFilesErrors) {
-      for (const iacFileError of iacDirFilesErrors) {
-        response += chalk.bold.red(getIacDisplayErrorFileOutput(iacFileError));
-      }
+    for (const reason of iacScanFailures) {
+      response += chalk.bold.red(getIacDisplayErrorFileOutput(reason));
     }
   }
 
@@ -320,6 +245,7 @@ async function test(...args: MethodArgs): Promise<TestCommandResult> {
     // first one
     error.code = errorResults[0].code;
     error.userMessage = errorResults[0].userMessage;
+    error.strCode = errorResults[0].strCode;
     throw error;
   }
 
@@ -371,135 +297,4 @@ function shouldFail(vulnerableResults: any[], failOn: FailOn) {
   }
   // should fail by default when there are vulnerable results
   return vulnerableResults.length > 0;
-}
-
-function validateSeverityThreshold(severityThreshold) {
-  return SEVERITIES.map((s) => s.verboseName).indexOf(severityThreshold) > -1;
-}
-
-function validateFailOn(arg: FailOn) {
-  return Object.keys(FAIL_ON).includes(arg);
-}
-
-function displayResult(
-  res: TestResult,
-  options: Options & TestOptions,
-  foundProjectCount?: number,
-) {
-  const meta = formatTestMeta(res, options);
-  const dockerAdvice = dockerRemediationForDisplay(res);
-  const projectType =
-    (res.packageManager as SupportedProjectTypes) || options.packageManager;
-  const localPackageTest = isLocalFolder(options.path);
-  let testingPath = options.path;
-  if (options.iac && options.iacDirFiles && res.targetFile) {
-    testingPath = pathLib.basename(res.targetFile);
-  }
-  const prefix = chalk.bold.white('\nTesting ' + testingPath + '...\n\n');
-
-  // handle errors by extracting their message
-  if (res instanceof Error) {
-    return prefix + res.message;
-  }
-  const issuesText =
-    res.licensesPolicy ||
-    TEST_SUPPORTED_IAC_PROJECTS.includes(projectType as IacProjectTypes)
-      ? 'issues'
-      : 'vulnerabilities';
-  let pathOrDepsText = '';
-
-  if (res.dependencyCount) {
-    pathOrDepsText += res.dependencyCount + ' dependencies';
-  } else if (options.iacDirFiles && res.targetFile) {
-    pathOrDepsText += pathLib.basename(res.targetFile);
-  } else {
-    pathOrDepsText += options.path;
-  }
-  const testedInfoText = `Tested ${pathOrDepsText} for known ${issuesText}`;
-
-  let multiProjAdvice = '';
-
-  const advertiseGradleSubProjectsCount =
-    projectType === 'gradle' &&
-    !options['gradle-sub-project'] &&
-    !options.allProjects &&
-    foundProjectCount;
-  if (advertiseGradleSubProjectsCount) {
-    multiProjAdvice = chalk.bold.white(
-      `\n\nTip: This project has multiple sub-projects (${foundProjectCount}), ` +
-        'use --all-sub-projects flag to scan all sub-projects.',
-    );
-  }
-  const advertiseAllProjectsCount =
-    projectType !== 'gradle' &&
-    !isMultiProjectScan(options) &&
-    foundProjectCount;
-  if (advertiseAllProjectsCount) {
-    multiProjAdvice = chalk.bold.white(
-      `\n\nTip: Detected multiple supported manifests (${foundProjectCount}), ` +
-        'use --all-projects to scan all of them at once.',
-    );
-  }
-
-  // OK  => no vulns found, return
-  if (res.ok && res.vulnerabilities.length === 0) {
-    const vulnPathsText = options.showVulnPaths
-      ? 'no vulnerable paths found.'
-      : 'none were found.';
-    const summaryOKText = chalk.green(`✓ ${testedInfoText}, ${vulnPathsText}`);
-    const nextStepsText = localPackageTest
-      ? '\n\nNext steps:' +
-        '\n- Run `snyk monitor` to be notified ' +
-        'about new related vulnerabilities.' +
-        '\n- Run `snyk test` as part of ' +
-        'your CI/test.'
-      : '';
-    // user tested a package@version and got 0 vulns back, but there were dev deps
-    // to consider
-    // to consider
-    const snykPackageTestTip: string = !(
-      options.docker ||
-      localPackageTest ||
-      options.dev
-    )
-      ? '\n\nTip: Snyk only tests production dependencies by default. You can try re-running with the `--dev` flag.'
-      : '';
-
-    const dockerCTA = dockerUserCTA(options);
-    return (
-      prefix +
-      meta +
-      '\n\n' +
-      summaryOKText +
-      multiProjAdvice +
-      (isCI()
-        ? ''
-        : dockerAdvice + nextStepsText + snykPackageTestTip + dockerCTA)
-    );
-  }
-
-  if (
-    TEST_SUPPORTED_IAC_PROJECTS.includes(res.packageManager as IacProjectType)
-  ) {
-    return getIacDisplayedOutput(
-      (res as any) as IacTestResponse,
-      testedInfoText,
-      meta,
-      prefix,
-    );
-  }
-
-  // NOT OK => We found some vulns, let's format the vulns info
-
-  return getDisplayedOutput(
-    res as TestResult,
-    options,
-    testedInfoText,
-    localPackageTest,
-    projectType,
-    meta,
-    prefix,
-    multiProjAdvice,
-    dockerAdvice,
-  );
 }

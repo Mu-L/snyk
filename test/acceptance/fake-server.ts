@@ -55,7 +55,16 @@ export function fakeServer(root, apikey) {
   });
 
   server.use((req, res, next) => {
-    if (!server._nextResponse && !server._nextStatusCode) {
+    // these test don't run on the new experimental flow
+    // so once we deprecate legacy this check can be removed
+    const isExperimentalIac =
+      req.url !== undefined &&
+      (req.url.includes('/iac-org-settings') ||
+        req.url.includes('/feature-flags/experimentalLocalExecIac'));
+    if (
+      isExperimentalIac ||
+      (!server._nextResponse && !server._nextStatusCode)
+    ) {
       return next();
     }
     const response = server._nextResponse;
@@ -82,7 +91,8 @@ export function fakeServer(root, apikey) {
       res.status(404);
       res.send({
         code: 404,
-        userMessage: 'cli error message',
+        userMessage:
+          'Org missing-org was not found or you may not have the correct permissions',
       });
       return next();
     }
@@ -106,7 +116,8 @@ export function fakeServer(root, apikey) {
       res.status(404);
       res.send({
         code: 404,
-        userMessage: 'cli error message',
+        userMessage:
+          'Org missing-org was not found or you may not have the correct permissions',
       });
       return next();
     }
@@ -127,7 +138,7 @@ export function fakeServer(root, apikey) {
   server.post(root + '/docker-jwt/test-dependencies', (req, res, next) => {
     if (
       req.headers.authorization &&
-      !req.headers.authorization.includes('bearer')
+      !req.headers.authorization.includes('Bearer')
     ) {
       res.send(401);
     }
@@ -176,7 +187,8 @@ export function fakeServer(root, apikey) {
       res.status(404);
       res.send({
         code: 404,
-        userMessage: 'cli error message',
+        userMessage:
+          'Org missing-org was not found or you may not have the correct permissions',
       });
       return next();
     }
@@ -225,7 +237,8 @@ export function fakeServer(root, apikey) {
       res.status(404);
       res.send({
         code: 404,
-        userMessage: 'cli error message',
+        userMessage:
+          'Org missing-org was not found or you may not have the correct permissions',
       });
       return next();
     }
@@ -249,7 +262,8 @@ export function fakeServer(root, apikey) {
       res.status(404);
       res.send({
         code: 404,
-        userMessage: 'cli error message',
+        userMessage:
+          'Org missing-org was not found or you may not have the correct permissions',
       });
       return next();
     }
@@ -270,13 +284,13 @@ export function fakeServer(root, apikey) {
   server.get(
     root + '/cli-config/feature-flags/:featureFlag',
     (req, res, next) => {
+      const org = req.params.org;
       const flag = req.params.featureFlag;
-      if ((req as any).params.org === 'no-flag') {
+      const disabled = new Set(['optOutFromLocalExecIac']);
+      if (org === 'no-flag' || disabled.has(flag)) {
         res.send({
           ok: false,
-          userMessage: `Org ${
-            (req as any).org
-          } doesn\'t have \'${flag}\' feature enabled'`,
+          userMessage: `Org ${org} doesn't have '${flag}' feature enabled'`,
         });
         return next();
       }
@@ -286,6 +300,20 @@ export function fakeServer(root, apikey) {
       return next();
     },
   );
+
+  server.get(root + '/iac-org-settings', (req, res, next) => {
+    res.status(200);
+    res.send({
+      meta: {
+        isPrivate: false,
+        isLicensesEnabled: false,
+        ignoreSettings: null,
+        org: req.params.org || 'test-org',
+      },
+      customPolicies: {},
+    });
+    return next();
+  });
 
   server.get(root + '/authorization/:action', (req, res, next) => {
     res.send({ result: { allowed: true } });

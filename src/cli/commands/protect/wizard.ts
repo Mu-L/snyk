@@ -43,8 +43,8 @@ import {
   Options,
   MonitorMeta,
   MonitorResult,
-  WizardOptions,
   PackageJson,
+  ProtectOptions,
 } from '../../../lib/types';
 import { LegacyVulnApiResult } from '../../../lib/snyk-test/legacy';
 import { MultiProjectResult } from '@snyk/cli-interface/legacy/plugin';
@@ -82,7 +82,7 @@ async function processPackageManager(options: Options) {
   return Promise.resolve(options);
 }
 
-async function loadOrCreatePolicyFile(options: Options & WizardOptions) {
+async function loadOrCreatePolicyFile(options: Options & ProtectOptions) {
   let policyFile;
   try {
     policyFile = await snyk.policy.load(options['policy-path'], options);
@@ -202,8 +202,8 @@ async function processWizardFlow(options) {
 
         return snyk.policy.loadFromText(res.policy).then((combinedPolicy) => {
           return tryRequire(packageFile).then((pkg) => {
-            options.packageLeading = pkg.prefix;
-            options.packageTrailing = pkg.suffix;
+            options.packageLeading = pkg.leading;
+            options.packageTrailing = pkg.trailing;
             return interactive(
               res,
               pkg,

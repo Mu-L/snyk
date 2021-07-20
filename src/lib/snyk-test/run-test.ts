@@ -29,6 +29,7 @@ import {
   InternalServerError,
   NoSupportedManifestsFoundError,
   UnsupportedFeatureFlagError,
+  NotFoundError,
 } from '../errors';
 import * as snyk from '../';
 import { isCI } from '../is-ci';
@@ -66,11 +67,10 @@ import {
 import { CallGraphError, CallGraph } from '@snyk/cli-interface/legacy/common';
 import * as alerts from '../alerts';
 import { abridgeErrorMessage } from '../error-format';
-import { authHeaderWithApiTokenOrDockerJWT } from '../api-token';
+import { getAuthHeader } from '../api-token';
 import { getEcosystem } from '../ecosystems';
 import { Issue } from '../ecosystems/types';
 import { assembleEcosystemPayloads } from './assemble-payloads';
-import { NonExistingPackageError } from '../errors/non-existing-package-error';
 import request = require('../request');
 import spinner = require('../spinner');
 
@@ -240,7 +240,9 @@ async function sendAndParseResults(
     const iacResults: Promise<TestResult>[] = [];
 
     await spinner.clear<void>(spinnerLbl)();
-    await spinner(spinnerLbl);
+    if (!options.quiet) {
+      await spinner(spinnerLbl);
+    }
     for (const payload of payloads) {
       iacResults.push(
         queue.add(async () => {
@@ -266,7 +268,9 @@ async function sendAndParseResults(
   const results: TestResult[] = [];
   for (const payload of payloads) {
     await spinner.clear<void>(spinnerLbl)();
-    await spinner(spinnerLbl);
+    if (!options.quiet) {
+      await spinner(spinnerLbl);
+    }
     /** sendTestPayload() deletes the request.body from the payload once completed. */
     const payloadCopy = Object.assign({}, payload);
     const res = await sendTestPayload(payload);
@@ -491,7 +495,7 @@ function handleTestHttpErrorResponse(res, body) {
       err.innerError = body.stack;
       break;
     case 404:
-      err = new NonExistingPackageError();
+      err = new NotFoundError(userMessage);
       err.innerError = body.stack;
       break;
     case 405:
@@ -556,7 +560,9 @@ async function assembleLocalPayloads(
   try {
     const payloads: Payload[] = [];
     await spinner.clear<void>(spinnerLbl)();
-    await spinner(spinnerLbl);
+    if (!options.quiet) {
+      await spinner(spinnerLbl);
+    }
     if (options.iac) {
       return assembleIacLocalPayloads(root, options);
     }
@@ -564,7 +570,7 @@ async function assembleLocalPayloads(
     const failedResults = (deps as MultiProjectResultCustom).failedResults;
     if (failedResults?.length) {
       await spinner.clear<void>(spinnerLbl)();
-      if (!options.json) {
+      if (!options.json && !options.quiet) {
         console.warn(
           chalk.bold.red(
             `✗ ${failedResults.length}/${failedResults.length +
@@ -585,11 +591,19 @@ async function assembleLocalPayloads(
       'meta.versionBuildInfo.metaBuildVersion.mvnVersion',
       null,
     );
+    const sbtVersion = get(
+      deps.plugin,
+      'meta.versionBuildInfo.metaBuildVersion.sbtVersion',
+      null,
+    );
     if (javaVersion) {
       analytics.add('javaVersion', javaVersion);
     }
     if (mvnVersion) {
       analytics.add('mvnVersion', mvnVersion);
+    }
+    if (sbtVersion) {
+      analytics.add('sbtVersion', sbtVersion);
     }
 
     for (const scannedProject of deps.scannedProjects) {
@@ -788,7 +802,7 @@ async function assembleLocalPayloads(
         json: true,
         headers: {
           'x-is-ci': isCI(),
-          authorization: authHeaderWithApiTokenOrDockerJWT(),
+          authorization: getAuthHeader(),
         },
         qs: common.assembleQueryString(options),
         body,

@@ -12,7 +12,6 @@ import {
   MonitorMeta,
   MonitorResult,
   Options,
-  PolicyOptions,
   Contributor,
 } from '../../../lib/types';
 import * as config from '../../../lib/config';
@@ -20,13 +19,13 @@ import * as detect from '../../../lib/detect';
 import { GoodResult, BadResult } from './types';
 import * as spinner from '../../../lib/spinner';
 import * as analytics from '../../../lib/analytics';
-import { MethodArgs, ArgsOptions } from '../../args';
-import { apiTokenExists } from '../../../lib/api-token';
+import { MethodArgs } from '../../args';
+import { apiOrOAuthTokenExists } from '../../../lib/api-token';
 import { maybePrintDepTree, maybePrintDepGraph } from '../../../lib/print-deps';
 import { monitor as snykMonitor } from '../../../lib/monitor';
 import { processJsonMonitorResponse } from './process-json-monitor';
 import snyk = require('../../../lib'); // TODO(kyegupov): fix import
-import { formatMonitorOutput } from './formatters/format-monitor-response';
+import { formatMonitorOutput } from '../../../lib/formatters';
 import { getDepsFromPlugin } from '../../../lib/plugins/get-deps-from-plugin';
 import { getExtraProjectCount } from '../../../lib/plugins/get-extra-project-count';
 import { extractPackageManager } from '../../../lib/plugins/extract-package-manager';
@@ -35,10 +34,15 @@ import { convertMultiResultToMultiCustom } from '../../../lib/plugins/convert-mu
 import { convertSingleResultToMultiCustom } from '../../../lib/plugins/convert-single-splugin-res-to-multi-custom';
 import { PluginMetadata } from '@snyk/cli-interface/legacy/plugin';
 import { getContributors } from '../../../lib/monitor/dev-count-analysis';
-import { FailedToRunTestError, MonitorError } from '../../../lib/errors';
+import {
+  FailedToRunTestError,
+  MonitorError,
+  MissingArgError,
+} from '../../../lib/errors';
 import { isMultiProjectScan } from '../../../lib/is-multi-project-scan';
 import { getEcosystem, monitorEcosystem } from '../../../lib/ecosystems';
 import { getFormattedMonitorOutput } from '../../../lib/ecosystems/monitor';
+import { processCommandArgs } from '../process-command-args';
 
 const SEPARATOR = '\n-------------------------------------------------------\n';
 const debug = Debug('snyk');
@@ -58,19 +62,8 @@ async function promiseOrCleanup<T>(
 // Returns an array of Registry responses (one per every sub-project scanned), a single response,
 // or an error message.
 async function monitor(...args0: MethodArgs): Promise<any> {
-  let args = [...args0];
-  let monitorOptions = {};
+  const { options, paths } = processCommandArgs(...args0);
   const results: Array<GoodResult | BadResult> = [];
-  if (typeof args[args.length - 1] === 'object') {
-    monitorOptions = args.pop() as ArgsOptions;
-  }
-  args = args.filter(Boolean);
-
-  // populate with default path (cwd) if no path given
-  if (args.length === 0) {
-    args.unshift(process.cwd());
-  }
-  const options = monitorOptions as Options & PolicyOptions & MonitorOptions;
 
   if (options.id) {
     snyk.id = options.id;
@@ -86,7 +79,13 @@ async function monitor(...args0: MethodArgs): Promise<any> {
     throw new Error('`--remote-repo-url` is not supported for container scans');
   }
 
-  apiTokenExists();
+  // Handles no image arg provided to the container command until
+  // a validation interface is implemented in the docker plugin.
+  if (options.docker && paths.length === 0) {
+    throw new MissingArgError();
+  }
+
+  apiOrOAuthTokenExists();
 
   let contributors: Contributor[] = [];
   if (!options.docker && analytics.allowAnalytics()) {
@@ -99,11 +98,7 @@ async function monitor(...args0: MethodArgs): Promise<any> {
 
   const ecosystem = getEcosystem(options);
   if (ecosystem) {
-    const commandResult = await monitorEcosystem(
-      ecosystem,
-      args as string[],
-      options,
-    );
+    const commandResult = await monitorEcosystem(ecosystem, paths, options);
 
     const [monitorResults, monitorErrors] = commandResult;
 
@@ -116,7 +111,7 @@ async function monitor(...args0: MethodArgs): Promise<any> {
   }
 
   // Part 1: every argument is a scan target; process them sequentially
-  for (const path of args as string[]) {
+  for (const path of paths) {
     debug(`Processing ${path}...`);
     try {
       validateMonitorPath(path, options.docker);

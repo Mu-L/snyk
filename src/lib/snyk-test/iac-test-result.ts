@@ -4,12 +4,13 @@ export interface AnnotatedIacIssue {
   id: string;
   title: string;
   description: string;
-  severity: SEVERITY;
+  severity: SEVERITY | 'none';
   isIgnored: boolean;
   cloudConfigPath: string[];
   type: string;
   subType: string;
-  path: string[];
+  path?: string[];
+  documentation?: string;
   // Legacy fields from Registry, unused.
   name?: string;
   from?: string[];
@@ -49,6 +50,8 @@ export function mapIacTestResult(
     };
   }
 
+  const infrastructureAsCodeIssues =
+    iacTest?.result?.cloudConfigResults.map(mapIacIssue) || [];
   const {
     result: { projectType },
     ...filteredIacTest
@@ -56,8 +59,8 @@ export function mapIacTestResult(
   return {
     ...filteredIacTest,
     projectType,
-    [IAC_ISSUES_KEY]:
-      iacTest?.result?.cloudConfigResults.map(mapIacIssue) || [],
+    ok: infrastructureAsCodeIssues.length === 0,
+    [IAC_ISSUES_KEY]: infrastructureAsCodeIssues,
   };
 }
 

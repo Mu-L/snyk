@@ -15,7 +15,7 @@ For advanced usage, we offer language and context specific flags, listed further
 
 - `--exclude`=<DIRECTORY>[,<DIRECTORY>]...>:
   (only in `test` and `monitor` commands)
-  Can be used with --all-projects and --yarn-workspaces to indicate sub-directories to exclude. Directories must be comma separated.
+  Can be used with --all-projects and --yarn-workspaces to indicate sub-directories and files to exclude. Must be comma separated.
 
   If using with `--detection-depth` exclude ignores directories at any level deep.
 
@@ -86,7 +86,7 @@ For advanced usage, we offer language and context specific flags, listed further
   Save test output in SARIF format directly to the <OUTPUT_FILE_PATH> file, regardless of whether or not you use the `--sarif` option.
   This is especially useful if you want to display the human-readable test output via stdout and at the same time save the SARIF format output to a file.
 
-- `--severity-threshold`=low|medium|high:
+- `--severity-threshold`=low|medium|high|critical:
   Only report vulnerabilities of provided level or higher.
 
 - `--fail-on`=all|upgradable|patchable:
@@ -138,7 +138,7 @@ Below are flags that are influencing CLI behavior for specific projects, languag
 
 - `--configuration-attributes`=<ATTRIBUTE>[,<ATTRIBUTE>]...:
   Select certain values of configuration attributes to resolve the dependencies. E.g. `buildtype:release,usage:java-runtime`
- 
+
 - `--reachable`:
   (only in `test` and `monitor` commands)
   Analyze your source code to find which vulnerable
@@ -151,7 +151,7 @@ Below are flags that are influencing CLI behavior for specific projects, languag
 
 - `--init-script`=<FILE>
   For projects that contain a gradle initialization script.
-  
+
 ### .Net & NuGet options
 
 - `--assets-project-name`:
@@ -179,7 +179,7 @@ Below are flags that are influencing CLI behavior for specific projects, languag
 
 - `--yarn-workspaces`:
   (only in `test` and `monitor` commands)
-  Detect and scan yarn workspaces. You can specify how many sub-directories to search using `--detection-depth` and exclude directories using `--exclude`.
+  Detect and scan yarn workspaces. You can specify how many sub-directories to search using `--detection-depth` and exclude directories and files using `--exclude`.
 
 ### CocoaPods options
 

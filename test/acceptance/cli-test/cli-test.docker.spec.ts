@@ -67,7 +67,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
           },
@@ -144,7 +143,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
           },
@@ -202,9 +200,7 @@ export const DockerTests: AcceptanceTests = {
       }
     },
 
-    '`test foo:latest --docker --file=Dockerfile`': (params, utils) => async (
-      t,
-    ) => {
+    '`test foo:latest --docker --file=Dockerfile`': (params) => async (t) => {
       const spyPlugin = stubDockerPluginResponse(
         params.ecoSystemPlugins,
         {
@@ -297,7 +293,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
           },
@@ -410,7 +405,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
           },
@@ -486,7 +480,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
             'policy-path': 'npm-package-policy/custom-location',
@@ -568,7 +561,6 @@ export const DockerTests: AcceptanceTests = {
             org: 'explicit-org',
             projectName: null,
             packageManager: null,
-            pinningSupported: null,
             path: 'foo:latest',
             showVulnPaths: 'some',
           },
@@ -789,7 +781,7 @@ export const DockerTests: AcceptanceTests = {
 // fixture can be fixture path or object
 function stubDockerPluginResponse(plugins, fixture: string | object, t) {
   const plugin = {
-    async scan(_) {
+    async scan() {
       return typeof fixture === 'object' ? fixture : require(fixture);
     },
     async display() {

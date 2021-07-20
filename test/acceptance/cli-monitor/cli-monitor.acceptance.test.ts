@@ -38,6 +38,7 @@ import * as plugins from '../../../src/lib/plugins/index';
 import * as ecosystemPlugins from '../../../src/lib/ecosystems/plugins';
 import { createCallGraph } from '../../utils';
 import { DepGraphBuilder } from '@snyk/dep-graph';
+import * as depGraphLib from '@snyk/dep-graph';
 
 /*
   TODO: enable these tests, once we switch from node-tap
@@ -136,6 +137,21 @@ if (!isWindows) {
       t.notOk(errObj.ok, 'ok object should be false');
       t.match(errObj.error, 'is not a valid path', 'show err message');
       t.match(errObj.path, 'non-existing', 'should show specified path');
+      t.pass('throws err');
+    }
+  });
+
+  test('`monitor missing container image`', async (t) => {
+    chdirWorkspaces();
+    try {
+      await cli.monitor({ docker: true });
+      t.fail('should have failed');
+    } catch (err) {
+      t.match(
+        err.message,
+        'Could not detect an image. Specify an image name to scan and try running the command again.',
+        'show err message',
+      );
       t.pass('throws err');
     }
   });
@@ -438,49 +454,43 @@ if (!isWindows) {
     }
   });
 
-  // test('`monitor yarn v2 project`', async (t) => {
-  //   const nodeVersion = parseInt(process.version.slice(1).split('.')[0], 10);
-  //
-  //   if (nodeVersion < 10) {
-  //     return t.skip();
-  //   }
-  //
-  //   chdirWorkspaces();
-  //
-  //   await cli.monitor('yarn-v2');
-  //   const req = server.popRequest();
-  //   t.equal(req.method, 'PUT', 'makes PUT request');
-  //   t.equal(
-  //     req.headers['x-snyk-cli-version'],
-  //     versionNumber,
-  //     'sends version number',
-  //   );
-  //   t.match(req.url, '/monitor/yarn/graph', 'puts at correct url');
-  //
-  //   const depGraphJSON = req.body.depGraphJSON;
-  //   t.ok(depGraphJSON);
-  //   const lodash = depGraphJSON.pkgs.find((pkg) => pkg.info.name === 'lodash');
-  //
-  //   t.ok(lodash, 'dependency');
-  //   t.notOk(req.body.targetFile, 'doesnt send the targetFile');
-  //   t.notOk(depGraphJSON.from, 'no "from" array on root');
-  //   t.notOk(lodash.from, 'no "from" array on dep');
-  //   if (process.platform === 'win32') {
-  //     t.true(
-  //       req.body.targetFileRelativePath.endsWith(
-  //         '\\test\\acceptance\\workspaces\\yarn-v2\\yarn.lock',
-  //       ),
-  //       'matching file path win32',
-  //     );
-  //   } else {
-  //     t.true(
-  //       req.body.targetFileRelativePath.endsWith(
-  //         '/test/acceptance/workspaces/yarn-v2/yarn.lock',
-  //       ),
-  //       'matching file path',
-  //     );
-  //   }
-  // });
+  test('`monitor yarn v2 project`', async (t) => {
+    chdirWorkspaces();
+
+    await cli.monitor('yarn-v2');
+    const req = server.popRequest();
+    t.equal(req.method, 'PUT', 'makes PUT request');
+    t.equal(
+      req.headers['x-snyk-cli-version'],
+      versionNumber,
+      'sends version number',
+    );
+    t.match(req.url, '/monitor/yarn/graph', 'puts at correct url');
+
+    const depGraphJSON = req.body.depGraphJSON;
+    t.ok(depGraphJSON);
+    const lodash = depGraphJSON.pkgs.find((pkg) => pkg.info.name === 'lodash');
+
+    t.ok(lodash, 'dependency');
+    t.notOk(req.body.targetFile, 'doesnt send the targetFile');
+    t.notOk(depGraphJSON.from, 'no "from" array on root');
+    t.notOk(lodash.from, 'no "from" array on dep');
+    if (process.platform === 'win32') {
+      t.true(
+        req.body.targetFileRelativePath.endsWith(
+          '\\test\\acceptance\\workspaces\\yarn-v2\\yarn.lock',
+        ),
+        'matching file path win32',
+      );
+    } else {
+      t.true(
+        req.body.targetFileRelativePath.endsWith(
+          '/test/acceptance/workspaces/yarn-v2/yarn.lock',
+        ),
+        'matching file path',
+      );
+    }
+  });
 
   test('`monitor yarn-package from within folder`', async (t) => {
     chdirWorkspaces('yarn-package');
@@ -1587,6 +1597,69 @@ if (!isWindows) {
     t.match(results[0].packageManager, 'composer', 'composer package manager');
     t.match(results[1].packageManager, 'rubygems', 'rubygems package manager');
     t.end();
+  });
+
+  test('`monitor elixir-hex --file=mix.exs`', async (t) => {
+    chdirWorkspaces();
+    const plugin = {
+      async inspect() {
+        return {
+          scannedProjects: [
+            {
+              packageManager: 'hex',
+              targetFile: 'mix.exs',
+              depGraph: await depGraphLib.createFromJSON({
+                schemaVersion: '1.2.0',
+                pkgManager: {
+                  name: 'hex',
+                },
+                pkgs: [
+                  {
+                    id: 'snowflex@0.3.1',
+                    info: {
+                      name: 'snowflex',
+                      version: '0.3.1',
+                    },
+                  },
+                ],
+                graph: {
+                  rootNodeId: 'root-node',
+                  nodes: [
+                    {
+                      nodeId: 'root-node',
+                      pkgId: 'snowflex@0.3.1',
+                      deps: [],
+                    },
+                  ],
+                },
+              }),
+            },
+          ],
+          plugin: {
+            name: 'testplugin',
+            runtime: 'testruntime',
+            targetFile: 'mix.exs',
+          },
+        };
+      },
+    };
+
+    const loadPlugin = sinon.stub(plugins, 'loadPlugin');
+    t.teardown(loadPlugin.restore);
+    loadPlugin.withArgs('hex').returns(plugin);
+
+    await cli.monitor('elixir-hex', { file: 'mix.exs' });
+    const req = server.popRequest();
+    t.equal(req.method, 'PUT', 'makes PUT request');
+    t.equal(
+      req.headers['x-snyk-cli-version'],
+      versionNumber,
+      'sends version number',
+    );
+    t.match(req.url, '/monitor/hex/graph', 'puts at correct url');
+    t.equal(req.body.targetFile, 'mix.exs', 'sends targetFile');
+    const depGraphJSON = req.body.depGraphJSON;
+    t.ok(depGraphJSON);
   });
 
   test('`monitor foo:latest --docker`', async (t) => {

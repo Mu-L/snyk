@@ -1,82 +1,108 @@
-import * as fs from 'fs';
 import { isLocalFolder } from '../../../../lib/detect';
-import { getFileType } from '../../../../lib/iac/iac-parser';
-import * as util from 'util';
-import { IacFileTypes } from '../../../../lib/iac/constants';
-import { IacFileScanResult, IacFileMetadata, IacFileData } from './types';
-import { getPolicyEngine } from './policy-engine';
-import { formatResults } from './results-formatter';
-import { tryParseIacFile } from './parsers';
-import { isLocalCacheExists, REQUIRED_LOCAL_CACHE_FILES } from './local-cache';
-
-const readFileContentsAsync = util.promisify(fs.readFile);
+import {
+  IaCTestFlags,
+  IacFileParsed,
+  IacFileParseFailure,
+  SafeAnalyticsOutput,
+  TestReturnValue,
+  EngineType,
+} from './types';
+import { addIacAnalytics } from './analytics';
+import { TestResult } from '../../../../lib/snyk-test/legacy';
+import {
+  initLocalCache,
+  loadFiles,
+  parseFiles,
+  scanFiles,
+  getIacOrgSettings,
+  applyCustomSeverities,
+  formatScanResults,
+  cleanLocalCache,
+} from './measurable-methods';
+import { isFeatureFlagSupportedForOrg } from '../../../../lib/feature-flags';
+import { FlagError } from './assert-iac-options-flag';
+import config = require('../../../../lib/config');
 
 // this method executes the local processing engine and then formats the results to adapt with the CLI output.
-// the current version is dependent on files to be present locally which are not part of the source code.
-// without these files this method would fail.
-// if you're interested in trying out the experimental local execution model for IaC scanning, please reach-out.
-export async function test(pathToScan: string, options) {
-  if (!isLocalCacheExists())
-    throw Error(
-      `Missing IaC local cache data, please validate you have: \n${REQUIRED_LOCAL_CACHE_FILES.join(
-        '\n',
-      )}`,
-    );
-  // TODO: add support for proper typing of old TestResult interface.
-  const results = await localProcessing(pathToScan);
-  const formattedResults = formatResults(results, options);
-  const singleFileFormattedResult = formattedResults[0];
-
-  return singleFileFormattedResult as any;
-}
-
-async function localProcessing(
+// this flow is the default GA flow for IAC scanning.
+export async function test(
   pathToScan: string,
-): Promise<IacFileScanResult[]> {
-  const filePathsToScan = await getFilePathsToScan(pathToScan);
-  const fileDataToScan = await parseFilesForScan(filePathsToScan);
-  const scanResults = await scanFilesForIssues(fileDataToScan);
-  return scanResults;
+  options: IaCTestFlags,
+): Promise<TestReturnValue> {
+  try {
+    const org = options.org ?? config.org;
+    const iacOrgSettings = await getIacOrgSettings(org);
+    const customRulesPath = await customRulesPathForOrg(options.rules, org);
+
+    await initLocalCache({ customRulesPath });
+
+    const filesToParse = await loadFiles(pathToScan, options);
+    const { parsedFiles, failedFiles } = await parseFiles(
+      filesToParse,
+      options,
+    );
+
+    // Duplicate all the files and run them through the custom engine.
+    if (customRulesPath) {
+      parsedFiles.push(
+        ...parsedFiles.map((file) => ({
+          ...file,
+          engineType: EngineType.Custom,
+        })),
+      );
+    }
+
+    const scannedFiles = await scanFiles(parsedFiles);
+    const resultsWithCustomSeverities = await applyCustomSeverities(
+      scannedFiles,
+      iacOrgSettings.customPolicies,
+    );
+    const formattedResults = formatScanResults(
+      resultsWithCustomSeverities,
+      options,
+      iacOrgSettings.meta,
+    );
+    addIacAnalytics(formattedResults);
+
+    // TODO: add support for proper typing of old TestResult interface.
+    return {
+      results: (formattedResults as unknown) as TestResult[],
+      // NOTE: No file or parsed file data should leave this function.
+      failures: isLocalFolder(pathToScan)
+        ? failedFiles.map(removeFileContent)
+        : undefined,
+    };
+  } finally {
+    cleanLocalCache();
+  }
 }
 
-async function getFilePathsToScan(pathToScan): Promise<IacFileMetadata[]> {
-  if (isLocalFolder(pathToScan)) {
-    throw new Error(
-      'IaC Experimental version does not support directory scan yet.',
-    );
+async function customRulesPathForOrg(
+  customRulesPath: string | undefined,
+  publicOrgId: string,
+): Promise<string | undefined> {
+  if (!customRulesPath) return;
+
+  const isCustomRulesSupported =
+    (await isFeatureFlagSupportedForOrg('iacCustomRules', publicOrgId)).ok ===
+    true;
+  if (isCustomRulesSupported) {
+    return customRulesPath;
   }
 
-  return [
-    { filePath: pathToScan, fileType: getFileType(pathToScan) as IacFileTypes },
-  ];
+  throw new FlagError('rules');
 }
 
-async function parseFilesForScan(
-  filesMetadata: IacFileMetadata[],
-): Promise<IacFileData[]> {
-  const parsedFileData: Array<IacFileData> = [];
-  for (const fileMetadata of filesMetadata) {
-    const fileContent = await readFileContentsAsync(
-      fileMetadata.filePath,
-      'utf-8',
-    );
-    const parsedFiles = tryParseIacFile(fileMetadata, fileContent);
-    parsedFileData.push(...parsedFiles);
-  }
-
-  return parsedFileData;
-}
-
-async function scanFilesForIssues(
-  parsedFiles: Array<IacFileData>,
-): Promise<IacFileScanResult[]> {
-  // TODO: when adding dir support move implementation to queue.
-  // TODO: when adding dir support gracefully handle failed scans
-  return Promise.all(
-    parsedFiles.map(async (file) => {
-      const policyEngine = await getPolicyEngine(file.engineType);
-      const scanResults = policyEngine.scanFile(file);
-      return scanResults;
-    }),
-  );
+export function removeFileContent({
+  filePath,
+  fileType,
+  failureReason,
+  projectType,
+}: IacFileParsed | IacFileParseFailure): SafeAnalyticsOutput {
+  return {
+    filePath,
+    fileType,
+    failureReason,
+    projectType,
+  };
 }

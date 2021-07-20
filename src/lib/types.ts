@@ -13,8 +13,7 @@ export type DepTree = legacyApi.DepTree;
 export type ShowVulnPaths = 'none' | 'some' | 'all';
 
 export interface TestOptions {
-  traverseNodeModules: boolean;
-  interactive: boolean;
+  traverseNodeModules?: boolean;
   pruneRepeatedSubdependencies?: boolean;
   showVulnPaths: ShowVulnPaths;
   failOn?: FailOn;
@@ -22,12 +21,16 @@ export interface TestOptions {
   reachableVulnsTimeout?: number;
   initScript?: string;
   yarnWorkspaces?: boolean;
+  gradleSubProject?: boolean;
+  command?: string; // python interpreter to use for python tests
   testDepGraphDockerEndpoint?: string | null;
   isDockerUser?: boolean;
+  /** @deprecated Only used by the legacy `iac test` flow remove once local exec path is GA */
   iacDirFiles?: IacFileInDirectory[];
 }
 
-export interface WizardOptions {
+export interface ProtectOptions {
+  interactive?: boolean;
   newPolicy: boolean;
 }
 
@@ -48,6 +51,7 @@ export interface Options {
   path: string;
   docker?: boolean;
   iac?: boolean;
+  code?: boolean;
   source?: boolean; // C/C++ Ecosystem Support
   file?: string;
   policy?: string;
@@ -71,13 +75,14 @@ export interface Options {
   detectionDepth?: number;
   exclude?: string;
   strictOutOfSync?: boolean;
-  // Used with the Docker plugin only. Allows requesting some experimental/unofficial features.
+  // Used only with the IaC mode & Docker plugin. Allows requesting some experimental/unofficial features.
   experimental?: boolean;
   // Used with the Docker plugin only. Allows application scanning.
   'app-vulns'?: boolean;
   debug?: boolean;
   sarif?: boolean;
   'group-issues'?: boolean;
+  quiet?: boolean;
 }
 
 // TODO(kyegupov): catch accessing ['undefined-properties'] via noImplicitAny
@@ -154,36 +159,37 @@ export type SupportedProjectTypes = IacProjectTypes | SupportedPackageManagers;
 
 // TODO: finish typing this there are many more!
 export type SupportedUserReachableFacingCliArgs =
-  | 'severity-threshold'
-  | 'prune-repeated-subdependencies'
-  | 'ignore-policy'
-  | 'trust-policies'
+  | 'all-projects'
+  | 'all-sub-projects'
+  | 'detection-depth'
   | 'docker'
-  | 'file'
-  | 'policy'
+  | 'dry-run'
   | 'fail-on'
+  | 'file'
+  | 'gradle-sub-project'
+  | 'ignore-policy'
+  | 'init-script'
+  | 'integration-name'
+  | 'integration-version'
   | 'json'
   | 'package-manager'
   | 'packages-folder'
-  | 'severity-threshold'
-  | 'strict-out-of-sync'
-  | 'all-sub-projects'
-  | 'sub-project'
-  | 'gradle-sub-project'
-  | 'skip-unresolved'
-  | 'scan-all-unmanaged'
-  | 'fail-on'
-  | 'all-projects'
-  | 'yarn-workspaces'
-  | 'detection-depth'
+  | 'policy'
   | 'project-name'
+  | 'prune-repeated-subdependencies'
   | 'reachable'
-  | 'reachable-vulns'
   | 'reachable-timeout'
+  | 'reachable-vulns'
   | 'reachable-vulns-timeout'
-  | 'init-script'
-  | 'integration-name'
-  | 'integration-version';
+  | 'rules'
+  | 'scan-all-unmanaged'
+  | 'severity-threshold'
+  | 'show-vulnerable-paths'
+  | 'skip-unresolved'
+  | 'strict-out-of-sync'
+  | 'sub-project'
+  | 'trust-policies'
+  | 'yarn-workspaces';
 
 export enum SupportedCliCommands {
   version = 'version',
@@ -192,6 +198,7 @@ export enum SupportedCliCommands {
   // auth = 'auth', // TODO: auth does not support argv._ at the moment
   test = 'test',
   monitor = 'monitor',
+  fix = 'fix',
   protect = 'protect',
   policy = 'policy',
   ignore = 'ignore',

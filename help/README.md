@@ -24,11 +24,11 @@ See other documents and help files for hints on how to format arguments. Keep fo
 ### CLI options
 
 ```md
-- `--severity-threshold`=low|medium|high:
+- `--severity-threshold`=low|medium|high|critical:
   Only report vulnerabilities of provided level or higher.
 ```
 
-CLI flag should be in backticks. Options (filenames, org names…) should use Keyword extension (see below) and literal options (true|false, low|medium|high…) should be typed as above.
+CLI flag should be in backticks. Options (filenames, org names…) should use Keyword extension (see below) and literal options (true|false, low|medium|high|critical…) should be typed as above.
 
 ### Keyword extension
 
@@ -49,9 +49,16 @@ Visually, it'll get rendered as underlined text. It's used to mark a "variable".
 
 ## Running locally
 
-- have docker running
+- Either have docker running, or have `groff` and `ronn` (really
+  [ronn-ng](https://github.com/apjanke/ronn-ng)) on your `$PATH`.
 - have `npm`/`npx` available
 
 ```
 $ npm run generate-help
+```
+
+Or, if you already have `groff` and `ronn`, and don't want to use Docker:
+
+```
+$ NO_DOCKER=1 npm run generate-help
 ```

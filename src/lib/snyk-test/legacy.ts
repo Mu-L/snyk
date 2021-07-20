@@ -102,7 +102,7 @@ export interface ReachablePaths {
 }
 
 interface AnnotatedIssue extends IssueData {
-  credit: any;
+  credit: string[];
   name: string;
   version: string;
   from: string[];
@@ -236,7 +236,7 @@ interface Issue {
   fixInfo: FixInfo;
 }
 
-interface TestDependenciesResult {
+export interface TestDependenciesResult {
   issuesData: {
     [issueId: string]: IssueData;
   };

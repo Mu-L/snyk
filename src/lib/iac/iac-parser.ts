@@ -1,7 +1,11 @@
 //TODO(orka): take out into a new lib
-import * as YAML from 'js-yaml';
 import * as debugLib from 'debug';
-import { IllegalIacFileErrorMsg, NotSupportedIacFileErrorMsg } from '../errors';
+import {
+  IllegalIacFileErrorMsg,
+  InternalServerError,
+  MissingApiTokenError,
+  NotSupportedIacFileErrorMsg,
+} from '../errors';
 import request = require('../request');
 import { api as getApiToken } from '../api-token';
 import * as config from './../config';
@@ -9,6 +13,7 @@ import {
   IacValidateTerraformResponse,
   IacValidationResponse,
 } from './constants';
+import { parseYAMLOrJSON } from '../../cli/commands/test/iac-local-execution/yaml-parser';
 
 const debug = debugLib('snyk-detect');
 
@@ -19,24 +24,20 @@ export function getFileType(filePath: string): string {
   return filePathSplit[filePathSplit.length - 1].toLowerCase();
 }
 
-function parseYamlOrJson(fileContent: string, filePath: string): any {
+function parseFileContent(fileContent: string, filePath: string): any {
   const fileType = getFileType(filePath);
   switch (fileType) {
     case 'yaml':
     case 'yml':
-      try {
-        return YAML.safeLoadAll(fileContent);
-      } catch (e) {
-        debug('Failed to parse iac config as a YAML');
-      }
-      break;
     case 'json':
       try {
-        const objectsArr: any[] = [];
-        objectsArr.push(JSON.parse(fileContent));
-        return objectsArr;
+        return parseYAMLOrJSON(fileContent);
       } catch (e) {
-        debug('Failed to parse iac config as a JSON');
+        if (fileType === 'json') {
+          debug('Failed to parse iac config as a JSON');
+        } else {
+          debug('Failed to parse iac config as a YAML');
+        }
       }
       break;
     default:
@@ -53,7 +54,7 @@ export function validateK8sFile(
   filePath: string,
   fileName: string,
 ): IacValidationResponse {
-  const k8sObjects: any[] = parseYamlOrJson(fileContent, filePath);
+  const k8sObjects: any[] = parseFileContent(fileContent, filePath);
   if (!k8sObjects) {
     return { isValidFile: false, reason: IllegalIacFileErrorMsg(fileName) };
   }
@@ -92,7 +93,7 @@ export function validateK8sFile(
 export async function makeValidateTerraformRequest(
   terraformFileContent: string,
 ): Promise<IacValidationResponse> {
-  const response = (await request({
+  const response = await request({
     body: {
       contentBase64: Buffer.from(terraformFileContent).toString('base64'),
     },
@@ -102,9 +103,24 @@ export async function makeValidateTerraformRequest(
     headers: {
       Authorization: `token ${getApiToken()}`,
     },
-  })) as IacValidateTerraformResponse;
+  });
+
+  // Token may have expired, so we need to ask the client to re-auth.
+  if (response.res.statusCode === 401) {
+    throw new MissingApiTokenError();
+  }
+
+  if (
+    !response.res.statusCode ||
+    (response.res.statusCode < 200 && response.res.statusCode >= 300)
+  ) {
+    debug(`internal server error - ${response.body}`);
+    throw new InternalServerError('Error occurred validating terraform file');
+  }
+
+  const { body } = response as IacValidateTerraformResponse;
   return {
-    isValidFile: !!response.body?.isValidTerraformFile,
-    reason: response.body?.reason || '',
+    isValidFile: body?.isValidTerraformFile ?? false,
+    reason: body?.reason ?? '',
   };
 }

@@ -15,7 +15,9 @@ export { UnsupportedPackageManagerError } from './unsupported-package-manager-er
 export { FailedToRunTestError } from './failed-to-run-test-error';
 export { TooManyVulnPaths } from './too-many-vuln-paths';
 export { AuthFailedError } from './authentication-failed-error';
-export { OptionMissingErrorError } from './option-missing-error';
+export { FeatureNotSupportedForOrgError } from './unsupported-feature-for-org-error';
+export { MissingOptionError } from './missing-option-error';
+export { MissingArgError } from './missing-arg-error';
 export { ExcludeFlagBadInputError } from './exclude-flag-bad-input';
 export { UnsupportedOptionCombinationError } from './unsupported-option-combination-error';
 export { FeatureNotSupportedByPackageManagerError } from './feature-not-supported-by-package-manager-error';
@@ -26,3 +28,4 @@ export {
   IllegalIacFileErrorMsg,
   NotSupportedIacAllProjects,
 } from './invalid-iac-file';
+export { NotFoundError } from './not-found-error';

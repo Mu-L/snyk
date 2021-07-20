@@ -2,15 +2,13 @@ version: 2.1
 
 orbs:
   win: circleci/windows@2.2.0
+  aws-cli: circleci/aws-cli@1.4.0
 
 defaults: &defaults
   parameters:
     node_version:
       type: string
       default: ''
-    use_npm7:
-      type: boolean
-      default: true
     root_tap_tests:
       type: boolean
       default: false
@@ -21,6 +19,9 @@ defaults: &defaults
       type: boolean
       default: false
     system_tests:
+      type: boolean
+      default: false
+    package_tests:
       type: boolean
       default: false
   working_directory: ~/snyk
@@ -147,6 +148,10 @@ commands:
             mv gh-download/gh_1.3.1_linux_amd64/bin/gh /home/circleci/bin
             which gh
             gh --version
+  install_lerna_linux:
+    description: Setup Lerna
+    steps:
+      - run: sudo npm install -g lerna@3.22.1
 
 jobs:
   regression-test:
@@ -159,10 +164,7 @@ jobs:
           version: 19.03.13
           docker_layer_caching: true
       - install_shellspec
-      - run:
-          name: Install npm@7
-          command: |
-            sudo npm install -g npm@7
+      - run: sudo npm install -g npm@7
       - show_node_version
       - update_local_npmrc_linux
       - install_deps
@@ -200,8 +202,11 @@ jobs:
             echo "Checkout the README in test/smoke folder for more details about this step"
             unset SNYK_API
             unset SNYK_API_KEY
-            shellspec -f d -e REGRESSION_TEST=1
-
+            shellspec --profile --output junit --reportdir ../../test-results/shellspec-regression-tests -f d -e REGRESSION_TEST=1
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
   test-windows:
     <<: *defaults
     <<: *windows_defaults
@@ -217,11 +222,11 @@ jobs:
       - checkout
       - attach_workspace:
           at: ~/snyk
-      - when:
-          condition: << parameters.use_npm7 >>
-          steps:
-            - run: npm install -g npm@7
+      - run: npm install -g npm@7
       - show_node_version
+      - run:
+          name: Setup Lerna
+          command: npm install -g lerna@3.22.1
       - run:
           name: Update local .npmrc file (Windows)
           command: echo "//registry.npmjs.org/:_authToken=$env:NPM_TOKEN" >> .npmrc
@@ -237,30 +242,78 @@ jobs:
           shell: bash.exe
           command: npm run snyk-auth-windows
       - when:
+          condition: << parameters.package_tests >>
+          steps:
+            - run:
+                name: Run Package unit tests
+                command: npm run test:packages-unit -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:packages-unit'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-packages-unit'
+      - when:
+          condition: << parameters.package_tests >>
+          steps:
+            - run:
+                name: Run Package acceptance tests
+                command: npm run test:packages-acceptance -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:packages-acceptance'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-packages-acceptance'
+      - when:
           condition: << parameters.root_tap_tests >>
           steps:
             - run:
                 name: Run "Root" tap tests
-                command: npm run test:test
+                command: |
+                  npm run test:test -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-test
       - when:
           condition: << parameters.jest_tests >>
           steps:
             - run:
-                name: Run Jest tests
-                command: npm run test:jest
+                name: Run Jest tests in root (to remove)
+                command: npm run test:jest -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest'
+            - run:
+                name: Run Jest Unit Tests
+                command: npm run test:jest-unit -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-unit'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-unit'
+            - run:
+                name: Run Jest System Tests
+                command: npm run test:jest-system -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-system'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-system'
+            - run:
+                name: Run Jest Acceptance Tests
+                command: npm run test:jest-acceptance -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-acceptance'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-acceptance'
       - when:
           condition: << parameters.acceptance_tests >>
           steps:
             - run:
                 name: Run Acceptance tests
-                command: npm run test:acceptance-windows
+                command: |
+                  npm run test:acceptance-windows -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-acceptance-windows
       - when:
           condition: << parameters.system_tests >>
           steps:
             - run:
                 name: Run System tests
-                command: npm run test:system
-
+                command: |
+                  npm run test:system -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-system
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
   test-linux:
     <<: *defaults
     docker:
@@ -275,11 +328,9 @@ jobs:
       - checkout
       - attach_workspace:
           at: ~/snyk
-      - when:
-          condition: << parameters.use_npm7 >>
-          steps:
-            - run: sudo npm install -g npm@7
+      - run: sudo npm install -g npm@7
       - show_node_version
+      - install_lerna_linux
       - update_local_npmrc_linux
       - install_deps
       - build_ts
@@ -290,30 +341,78 @@ jobs:
           name: Run auth
           command: npm run snyk-auth
       - when:
+          condition: << parameters.package_tests >>
+          steps:
+            - run:
+                name: Run Package unit tests
+                command: npm run test:packages-unit -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:packages-unit'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-packages-unit'
+      - when:
+          condition: << parameters.package_tests >>
+          steps:
+            - run:
+                name: Run Package acceptance tests
+                command: npm run test:packages-acceptance -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:packages-acceptance'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-packages-acceptance'
+      - when:
           condition: << parameters.root_tap_tests >>
           steps:
             - run:
                 name: Run "Root" tap tests
-                command: npm run test:test
+                command: |
+                  npm run test:test -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-test
       - when:
           condition: << parameters.jest_tests >>
           steps:
             - run:
-                name: Run Jest tests
-                command: npm run test:jest
+                name: Run Jest tests in root (to remove)
+                command: npm run test:jest -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest'
+            - run:
+                name: Run Jest Unit Tests
+                command: npm run test:jest-unit -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-unit'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-unit'
+            - run:
+                name: Run Jest System Tests
+                command: npm run test:jest-system -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-system'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-system'
+            - run:
+                name: Run Jest Acceptance Tests
+                command: npm run test:jest-acceptance -- --ci --reporters="default" --reporters="jest-junit"
+                environment:
+                  JEST_SUITE_NAME: 'test:jest-acceptance'
+                  JEST_JUNIT_OUTPUT_DIR: 'test-results/jest-acceptance'
       - when:
           condition: << parameters.acceptance_tests >>
           steps:
             - run:
                 name: Run Acceptance tests
-                command: npm run test:acceptance
+                command: |
+                  npm run test:acceptance -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-acceptance
       - when:
           condition: << parameters.system_tests >>
           steps:
             - run:
                 name: Run System tests
-                command: npm run test:system
-
+                command: |
+                  npm run test:system -- --output-file tap-output
+                  npx tap-junit --input tap-output --output test-results/tap-test-system
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
   dev-release:
     <<: *defaults
     docker:
@@ -328,9 +427,7 @@ jobs:
           command: |
             sudo npm install -g npm@7
       - show_node_version
-      - run:
-          name: Setup Lerna
-          command: sudo npm install -g lerna
+      - install_lerna_linux
       - install_deps
       - generate_help
       - run:
@@ -366,14 +463,13 @@ jobs:
           name: Should I release?
           command: ./release-scripts/should-i-release.sh
       - install_github_cli
+      - aws-cli/install
       - run:
           name: Install npm@7
           command: |
             sudo npm install -g npm@7
       - show_node_version
-      - run:
-          name: Setup Lerna
-          command: sudo npm install -g lerna
+      - install_lerna_linux
       - update_local_npmrc_linux
       - install_deps
       - generate_help
@@ -390,7 +486,7 @@ jobs:
       - run:
           name: Lerna Publish
           command: |
-            lerna publish minor --yes --no-push --no-git-tag-version
+            lerna publish minor --yes --no-push --no-git-tag-version --exact
       - run:
           name: Install osslsigncode
           command: sudo apt-get install -y osslsigncode
@@ -407,28 +503,17 @@ jobs:
           command: |
             ../release-scripts/validate-checksums.sh
       - run:
-          name: Create a GitHub release
+          name: Generate Release Notes
           command: |
-            latest_version=$(cat lerna.json | jq .version -r)
-            new_tag="v${latest_version}"
             npx conventional-changelog-cli -p angular -l -r 1 > RELEASE_NOTES.txt
-            gh release create ${new_tag} --title "${new_tag}" --notes-file RELEASE_NOTES.txt
       - run:
-          name: Add Assets to GitHub Release
+          name: Upload Artifacts
+          command: ./release-scripts/upload-artifacts.sh
+      - run:
+          name: Handle failed CLI release
           command: |
-            gh_latest_release_tag=$(gh api repos/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/releases/latest | jq .tag_name -r)
-            echo "gh_latest_release_tag: ${gh_latest_release_tag}"
-            gh release upload $gh_latest_release_tag \
-              binary-releases/snyk-alpine \
-              binary-releases/snyk-linux \
-              binary-releases/snyk-macos \
-              binary-releases/snyk-win.exe \
-              binary-releases/docker-mac-signed-bundle.tar.gz \
-              binary-releases/snyk-alpine.sha256 \
-              binary-releases/snyk-linux.sha256 \
-              binary-releases/snyk-macos.sha256 \
-              binary-releases/snyk-win.exe.sha256 \
-              binary-releases/docker-mac-signed-bundle.tar.gz.sha256
+            ./release-scripts/handle-failed-release.sh
+          when: on_fail
 
 workflows:
   version: 2
@@ -448,12 +533,13 @@ workflows:
           requires:
             - Regression Test
       - test-windows:
-          name: Windows, Node 14 - Jest, Acceptance, System tests
+          name: Windows, Node 14 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
           node_version: '14.15.4'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
       - test-windows:
@@ -464,29 +550,31 @@ workflows:
           requires:
             - Regression Test
       - test-windows:
-          name: Windows, Node 12 - Jest, Acceptance, System tests
+          name: Windows, Node 12 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
-          node_version: '12.16.2'
+          node_version: '12.21.0'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
       - test-windows:
           name: Windows, Node 12 - "Root" tap tests
           context: nodejs-install
-          node_version: '12.16.2'
+          node_version: '12.21.0'
           root_tap_tests: true
           requires:
             - Regression Test
 
       - test-windows:
-          name: Windows, Node 10 - Jest, Acceptance, System tests
+          name: Windows, Node 10 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
           node_version: '10.23.1'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
       - test-windows:
@@ -497,12 +585,13 @@ workflows:
           requires:
             - Regression Test
       - test-linux:
-          name: Linux, Node 14 - Jest, Acceptance, System tests
+          name: Linux, Node 14 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
           node_version: '14.15.4'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
       - test-linux:
@@ -512,31 +601,31 @@ workflows:
           root_tap_tests: true
           requires:
             - Regression Test
-
       - test-linux:
-          name: Linux, Node 12 - Jest, Acceptance, System tests
+          name: Linux, Node 12 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
-          node_version: '12.16.2'
+          node_version: '12.21.0'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
-
       - test-linux:
           name: Linux, Node 12 - "Root" tap tests
           context: nodejs-install
-          node_version: '12.16.2'
+          node_version: '12.21.0'
           root_tap_tests: true
           requires:
             - Regression Test
       - test-linux:
-          name: Linux, Node 10 - Jest, Acceptance, System tests
+          name: Linux, Node 10 - Packages, Jest, Acceptance, System tests
           context: nodejs-install
           node_version: '10.23.1'
           jest_tests: true
           acceptance_tests: true
           system_tests: true
+          package_tests: true
           requires:
             - Regression Test
       - test-linux:
